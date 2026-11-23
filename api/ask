@@ -1,0 +1,482 @@
+(() => {
+  'use strict';
+
+  const cache = new Map();
+  let session = 0, raf = 0, audio = null, prep = null;
+  let awaitingComprehension = false;
+
+  const st = document.createElement('style');
+  st.textContent = '.w{opacity:0;transition:opacity .12s}.w.on{opacity:1}';
+  document.head.appendChild(st);
+
+  const pen = document.createElement('span');
+  pen.className = 'active-pen-cursor';
+  pen.textContent = '✍️';
+
+  const sel = document.getElementById('voiceEngineSelect');
+  if (sel) {
+    sel.innerHTML =
+      '<option value="gemini" class="bg-slate-900">صوت رجالي واضح (Gemini)</option>' +
+      '<option value="browser" class="bg-slate-900">صوت المتصفح</option>';
+  }
+  voiceEngineMode = 'gemini';
+
+  // تفصيل الدرس الأول: الانحطاط -> عوامل النهضة -> المشروع الإحيائي -> الرواد -> الخصائص
+  if (typeof LESSONS !== 'undefined' && LESSONS[0]) {
+    LESSONS[0].steps = [
+      {
+        label: '1-أ: مرحلة الانحطاط',
+        speech:
+          'نبدأ بالسياق التاريخي وعوامل ظهور إحياء النموذج حسب عمر الدسوقي. أولاً: مرحلة الانحطاط التي سبقت القرن التاسع عشر. ساد فيها الجمود الفني، وضعف الخيال، وركاكة اللفظ، والاعتماد على الزخرف اللفظي دون عمق في التجربة. هل فهمت مرحلة الانحطاط جيداً أم نعاود توضيحها؟',
+        buildHtml: () => `
+          <div class="board-card p-4 sm:p-5 rounded-2xl border-r-4 border-rose-400">
+            <h3 class="text-base sm:text-lg font-extrabold text-rose-300 mb-2" data-type="1">📌 1. السياق التاريخي — أ) مرحلة الانحطاط (قبل القرن 19)</h3>
+            <p class="text-xs sm:text-sm leading-relaxed" data-type="1">
+              قبل ظهور النهضة، عرف الشعر العربي مرحلة جمود وتقليد شكلي اتسمت بـ: ركاكة الأسلوب، ضحالة المعاني، تغليب البديع والزخرف اللفظي، وابتعاد القصيدة عن نبض الواقع الحي.
+            </p>
+            <div class="mt-3 p-2.5 rounded-xl bg-amber-500/15 border border-amber-400/30 text-xs font-bold text-amber-200" data-type="1">
+              ❓ سؤال الأستاذ: واش فهمتي مرحلة الانحطاط ولا نعاود نشرحها لك؟ (اكتب "راه فهمت" للانتقال إلى عوامل النهضة).
+            </div>
+          </div>
+        `
+      },
+      {
+        label: '1-ب: عوامل النهضة',
+        speech:
+          'الآن ننتقل من مرحلة الانحطاط إلى المرحلة الثانية: عوامل النهضة في بداية القرن التاسع عشر. من أبرزها: النهوض بالتعليم، وانتشار المطبعة والصحافة ونشر نفائس التراث العربي القديم، إضافة إلى الاحتكاك بالثقافة الغربية. هل فهمت عوامل النهضة أم نعاود شرحها؟',
+        buildHtml: () => `
+          <div class="board-card p-4 sm:p-5 rounded-2xl border-r-4 border-amber-400">
+            <div class="text-[11px] font-extrabold text-emerald-300 mb-1" data-type="1">↪️ إشارة الانتقال: بعد رصد واقع الانحطاط، ننتقل الآن إلى عوامل النهضة.</div>
+            <h3 class="text-base sm:text-lg font-extrabold text-amber-300 mb-2" data-type="1">🌱 2. عوامل النهضة (بداية القرن 19)</h3>
+            <ul class="space-y-1.5 text-xs sm:text-sm">
+              <li data-type="1">• <strong>النهوض بالتعليم والبعثات:</strong> توسيع آفاق المعرفة والاطلاع.</li>
+              <li data-type="1">• <strong>المطبعة والتراث:</strong> إخراج دواوين الشعر القديم من عصور القوة (الجاهلي، الأموي، العباسي، الأندلسي).</li>
+              <li data-type="1">• <strong>الاحتكاك بالغرب:</strong> الترجمة والانفتاح على نصوص وآداب جديدة.</li>
+            </ul>
+            <div class="mt-3 p-2.5 rounded-xl bg-amber-500/15 border border-amber-400/30 text-xs font-bold text-amber-200" data-type="1">
+              ❓ سؤال الأستاذ: واش فهمتي عوامل النهضة ولا نعاود نشرحها لك؟
+            </div>
+          </div>
+        `
+      },
+      {
+        label: '1-ج: المشروع الإحيائي',
+        speech:
+          'والآن ننتقل من عوامل النهضة إلى المرحلة الثالثة: المشروع الإحيائي. قرر الرواد نفض الغبار عن عمود الشعر العربي والعودة إلى النماذج الشعرية القديمة المشرقة عبر المحاكاة والمعارضة الشعرية لإحياء الشعر العربي. هل فهمت المشروع الإحيائي أم نعاود توضيحه؟',
+        buildHtml: () => `
+          <div class="board-card p-4 sm:p-5 rounded-2xl border-r-4 border-emerald-400">
+            <div class="text-[11px] font-extrabold text-emerald-300 mb-1" data-type="1">↪️ إشارة الانتقال: بعد تهيئة عوامل النهضة، تبلور المشروع الإحيائي.</div>
+            <h3 class="text-base sm:text-lg font-extrabold text-emerald-300 mb-2" data-type="1">🏛️ 3. المشروع الإحيائي</h3>
+            <p class="text-xs sm:text-sm leading-relaxed" data-type="1">
+              يقوم على استعادة عمود الشعر العربي والنسج على منوال فحول القدماء، مع الحفاظ على جزالة اللغة ومتانة التركيب والالتزام بنظام الشطرين والوزن والقافية والروي الموحد.
+            </p>
+            <div class="mt-3 p-2.5 rounded-xl bg-amber-500/15 border border-amber-400/30 text-xs font-bold text-amber-200" data-type="1">
+              ❓ سؤال الأستاذ: واش فهمتي المشروع الإحيائي ولا نعاود نشرحه لك؟
+            </div>
+          </div>
+        `
+      },
+      {
+        label: '1-د: الرواد والنصوص',
+        speech:
+          'ننتقل الآن إلى أبرز رواد إحياء النموذج: محمود سامي البارودي رائد الإحياء، وأحمد شوقي في المعارضات مثل نهج البردة، وحافظ إبراهيم، ومعروف الرصافي، وعلال الفاسي في المغرب. هل هذه الأسماء والأعمال واضحة لك؟',
+        buildHtml: () => `
+          <div class="board-card p-4 sm:p-5 rounded-2xl border-r-4 border-sky-400">
+            <div class="text-[11px] font-extrabold text-sky-300 mb-1" data-type="1">↪️ إشارة الانتقال: بعد ضبط السياق التاريخي، نتعرف على أبرز الرواد.</div>
+            <h3 class="text-base sm:text-lg font-extrabold text-sky-300 mb-3" data-type="1">👥 4. أبرز رواد إحياء النموذج</h3>
+            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 text-center text-xs sm:text-sm">
+              <div class="p-3 rounded-xl bg-white/5 border border-white/10">
+                <div class="font-extrabold text-amber-300" data-type="1">محمود سامي البارودي</div>
+                <div class="text-[11px] opacity-85 mt-1" data-type="1">سوف يبين الحق</div>
+              </div>
+              <div class="p-3 rounded-xl bg-white/5 border border-white/10">
+                <div class="font-extrabold text-emerald-300" data-type="1">أحمد شوقي</div>
+                <div class="text-[11px] opacity-85 mt-1" data-type="1">نهج البردة</div>
+              </div>
+              <div class="p-3 rounded-xl bg-white/5 border border-white/10">
+                <div class="font-extrabold text-sky-300" data-type="1">حافظ إبراهيم</div>
+                <div class="text-[11px] opacity-85 mt-1" data-type="1">رثاء البارودي</div>
+              </div>
+              <div class="p-3 rounded-xl bg-white/5 border border-white/10">
+                <div class="font-extrabold text-purple-300" data-type="1">معروف الرصافي</div>
+                <div class="text-[11px] opacity-85 mt-1" data-type="1">سياسة لا حماسة</div>
+              </div>
+              <div class="p-3 rounded-xl bg-white/5 border border-white/10 col-span-2 sm:col-span-1">
+                <div class="font-extrabold text-rose-300" data-type="1">علال الفاسي</div>
+                <div class="text-[11px] opacity-85 mt-1" data-type="1">يا هاتف الغاب</div>
+              </div>
+            </div>
+            <div class="mt-3 p-2.5 rounded-xl bg-amber-500/15 border border-amber-400/30 text-xs font-bold text-amber-200" data-type="1">
+              ❓ سؤال الأستاذ: واش فهمتي الرواد ولا نعاود؟
+            </div>
+          </div>
+        `
+      },
+      {
+        label: '1-هـ: الخصائص والتطبيق',
+        speech:
+          'وأخيراً ننتقل إلى خصائص القصيدة الإحيائية مضموناً ومعجماً وإيقاعاً وصورة شعرية مع مثال من قصيدة البارودي. هل كل شيء واضح أم عندك سؤال قبل إنهاء الدرس؟',
+        buildHtml: () => `
+          <div class="board-card p-4 sm:p-5 rounded-2xl border-r-4 border-emerald-400 space-y-4">
+            <div class="text-[11px] font-extrabold text-emerald-300" data-type="1">↪️ إشارة الانتقال: نختم الدرس بخصائص القصيدة الإحيائية ونموذج تطبيقي.</div>
+            <h3 class="text-base sm:text-lg font-extrabold text-emerald-300" data-type="1">📊 5. خصائص القصيدة الإحيائية + تطبيق</h3>
+            <div class="overflow-x-auto">
+              <table class="w-full text-xs sm:text-sm border-collapse text-right">
+                <thead>
+                  <tr class="bg-white/10 text-amber-300 border-b border-white/20">
+                    <th class="p-2 border-l border-white/10">المستوى</th>
+                    <th class="p-2">الخصائص</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-white/10">
+                  <tr>
+                    <td class="p-2 font-bold text-amber-200 border-l border-white/10">المضمون</td>
+                    <td class="p-2" data-type="1">أغراض قديمة (المدح، الرثاء، الفخر، الحكمة) وقضايا العصر والمنفى.</td>
+                  </tr>
+                  <tr>
+                    <td class="p-2 font-bold text-amber-200 border-l border-white/10">المعجم</td>
+                    <td class="p-2" data-type="1">معجم تراثي جزل ومتين السبك مستمد من القاموس القديم.</td>
+                  </tr>
+                  <tr>
+                    <td class="p-2 font-bold text-amber-200 border-l border-white/10">الإيقاع والبنية</td>
+                    <td class="p-2" data-type="1">شطران متناظران، وحدة الوزن والقافية والروي، التصريع، وتعدد الأغراض.</td>
+                  </tr>
+                  <tr>
+                    <td class="p-2 font-bold text-amber-200 border-l border-white/10">الصورة الشعرية</td>
+                    <td class="p-2" data-type="1">حسية تراثية تقوم على التشبيه والاستعارة ووظيفتها تزيينية.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="p-3.5 rounded-xl bg-black/30 border border-amber-400/30">
+              <div class="text-xs font-extrabold text-amber-300 mb-1">نموذج البارودي ("سوف يبين الحق"):</div>
+              <p class="font-poetry text-base sm:text-lg text-center text-white" data-type="1">طَيْفٌ أَلَمَّ بِسَمِيرَةَ زَائِرُ &nbsp;❖&nbsp; وَمَا الطَّيْفُ إِلَّا مَا تُرِيهِ الْخَوَاطِرُ</p>
+              <p class="text-xs opacity-90 mt-1" data-type="1">حضور التصريع في المطلع وتعدد الأغراض بين النسيب والحكمة والفخر.</p>
+            </div>
+          </div>
+        `
+      }
+    ];
+  }
+
+  function fetchAudio(text) {
+    if (!cache.has(text)) {
+      const p = (async () => {
+        for (let i = 0; i < 2; i++) {
+          const r = await fetch('/api/tts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text }),
+          });
+          if (r.ok) return URL.createObjectURL(await r.blob());
+          if (i === 1) throw new Error('TTS ' + r.status);
+          await new Promise((ok) => setTimeout(ok, 800));
+        }
+      })();
+      p.catch(() => cache.delete(text));
+      cache.set(text, p);
+    }
+    return cache.get(text);
+  }
+
+  window.typewriteCardElements = function (card) {
+    const spans = [];
+    card.querySelectorAll('[data-type="1"]').forEach((el) => {
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      const nodes = [];
+      while (walker.nextNode()) nodes.push(walker.currentNode);
+      nodes.forEach((n) => {
+        const frag = document.createDocumentFragment();
+        n.textContent.split(/(\s+)/).forEach((part) => {
+          if (!part) return;
+          if (/^\s+$/.test(part)) return frag.appendChild(document.createTextNode(part));
+          const s = document.createElement('span');
+          s.className = 'w';
+          s.textContent = part;
+          frag.appendChild(s);
+          spans.push(s);
+        });
+        n.replaceWith(frag);
+      });
+    });
+    let acc = 0;
+    const cum = spans.map((s) => (acc += s.textContent.length));
+    prep = { spans, cum, total: acc || 1, shown: 0 };
+  };
+
+  function reveal(p, frac) {
+    const limit = frac * p.total;
+    let moved = false;
+    while (p.shown < p.spans.length && p.cum[p.shown] <= limit) {
+      const s = p.spans[p.shown++];
+      s.classList.add('on');
+      s.after(pen);
+      moved = true;
+      if (p.shown % 4 === 0) playChalkTick();
+    }
+    if (moved) boardCanvas.scrollTop = boardCanvas.scrollHeight;
+  }
+
+  function finishReveal(p) {
+    p.spans.forEach((s) => s.classList.add('on'));
+    p.shown = p.spans.length;
+    pen.remove();
+  }
+
+  function runSync(p, getFrac) {
+    cancelAnimationFrame(raf);
+    const tick = () => {
+      reveal(p, Math.min(1, getFrac() / 0.93));
+      raf = requestAnimationFrame(tick);
+    };
+    tick();
+  }
+
+  function timerClock(durMs) {
+    let last = performance.now(), el = 0;
+    return () => {
+      const n = performance.now();
+      if (isPlaying) el += n - last;
+      last = n;
+      return el / durMs;
+    };
+  }
+
+  window.stopAllAudio = function () {
+    session++;
+    cancelAnimationFrame(raf);
+    clearTimeout(nextStepTimeout);
+    try { speechSynthesis.cancel(); } catch (e) {}
+    if (audio) {
+      audio.onended = audio.onerror = null;
+      try { audio.pause(); } catch (e) {}
+      audio = null;
+    }
+    pen.remove();
+    setSpeakingUI(false);
+  };
+
+  const origClear = clearTypingAndTimers;
+  window.clearTypingAndTimers = function () {
+    origClear();
+    cancelAnimationFrame(raf);
+    pen.remove();
+  };
+
+  window.speakSynchronized = async function (text, onDone) {
+    stopAllAudio();
+    const my = session;
+    liveSubtitle.textContent = text;
+    const p = prep; prep = null;
+    teacherStatusText.textContent = 'الأستاذ يحضّر الشرح...';
+
+    const done = () => {
+      if (my !== session) return;
+      cancelAnimationFrame(raf);
+      if (p) finishReveal(p);
+      setSpeakingUI(false);
+      awaitingComprehension = true;
+      isPlaying = false;
+      updateControlsUI();
+      teacherStatusText.textContent = 'في انتظار ردك: "راه فهمت" أو سؤالك';
+      const promptEl = document.getElementById('comprehensionPrompt');
+      if (promptEl) {
+        promptEl.textContent = '❓ واش فهمتي هاد الجزء ولا نعاود نشرحو ليك؟ اكتب "راه فهمت" أو سول على أي حاجة.';
+      }
+    };
+
+    let url = null;
+    if (voiceEngineMode === 'gemini') {
+      try { url = await fetchAudio(text); }
+      catch (e) { showToast('تعذّر صوت Gemini، تم التحويل لصوت المتصفح'); }
+    }
+    if (my !== session) return;
+
+    if (url) {
+      audio = new Audio(url);
+      audio.playbackRate = speechRate;
+      audio.onended = done;
+      audio.onerror = done;
+      audio.onplay = () => setSpeakingUI(true);
+      if (p) runSync(p, () => (audio && audio.duration ? audio.currentTime / audio.duration : 0));
+      audio.play().catch(() => {
+        showToast('اضغط على زر الشرح للسماح بتشغيل الصوت');
+        isPlaying = false;
+        updateControlsUI();
+      });
+      const next = LESSONS[currentLessonIdx].steps[currentStepIdx + 1];
+      if (next) fetchAudio(next.speech).catch(() => {});
+      return;
+    }
+
+    const dur = Math.max(3000, (text.length * 68) / speechRate);
+    if (p) runSync(p, timerClock(dur));
+    if (!('speechSynthesis' in window)) { nextStepTimeout = setTimeout(done, dur); return; }
+    const voices = speechSynthesis.getVoices().filter((v) => /^ar/i.test(v.lang));
+    const voice = voices.find((v) => /majed|maged|naayf|tarik|hamed|male/i.test(v.name)) || voices[0];
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = voice ? voice.lang : 'ar-SA';
+    if (voice) u.voice = voice;
+    u.rate = speechRate;
+    u.onstart = () => setSpeakingUI(true);
+    u.onend = done;
+    u.onerror = done;
+    speechSynthesis.speak(u);
+  };
+
+  function advanceToNextStep() {
+    const lesson = LESSONS[currentLessonIdx];
+    awaitingComprehension = false;
+    if (currentStepIdx + 1 < lesson.steps.length) {
+      isPlaying = true;
+      updateControlsUI();
+      executeStep(currentStepIdx + 1);
+    } else {
+      isPlaying = false;
+      updateControlsUI();
+      teacherStatusText.textContent = 'أتممت هذا الدرس بنجاح!';
+      showToast('برافو! كملتي هاد الدرس، تقدر تدوز للدرس الموالي.');
+    }
+  }
+
+  function repeatCurrentStep() {
+    const lesson = LESSONS[currentLessonIdx];
+    if (currentStepIdx < 0) return;
+    awaitingComprehension = false;
+    isPlaying = true;
+    updateControlsUI();
+    const step = lesson.steps[currentStepIdx];
+    const lastCard = liveContentStream.lastElementChild;
+    if (lastCard) {
+      const cardWrapper = document.createElement('div');
+      cardWrapper.className = 'step-card-enter';
+      cardWrapper.innerHTML = step.buildHtml();
+      liveContentStream.replaceChild(cardWrapper, lastCard);
+      const estimatedDurationMs = Math.max(4000, (step.speech.length * 68) / speechRate);
+      typewriteCardElements(cardWrapper, estimatedDurationMs);
+    }
+    speakSynchronized(step.speech);
+  }
+
+  async function handleStudentMessage(rawText) {
+    const msg = String(rawText || '').trim();
+    if (!msg) return;
+
+    const normalized = msg.replace(/\s+/g, ' ').trim();
+    const understoodPattern = /^(راه\s*فهمت|فهمت|صافي\s*فهمت|واضح|دوز|التالي|مزيان\s*فهمت)/i;
+    const repeatPattern = /^(عاود|عاود\s*الشرح|ما\s*فهمتش|عاودها|اشرح\s*ثاني)/i;
+
+    if (understoodPattern.test(normalized)) {
+      appendStudentBubble(msg, 'تم تأكيد الفهم — الانتقال للمرحلة الموالية...');
+      advanceToNextStep();
+      return;
+    }
+
+    if (repeatPattern.test(normalized)) {
+      appendStudentBubble(msg, 'حسناً، سأعيد شرح هذه النقطة بوضوح...');
+      repeatCurrentStep();
+      return;
+    }
+
+    appendStudentBubble(msg, 'جاري تحليل سؤالك وصياغة الشرح...');
+    const lesson = LESSONS[currentLessonIdx];
+    const currentStep = lesson.steps[currentStepIdx] || lesson.steps[0];
+
+    try {
+      const r = await fetch('/api/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question: msg,
+          lessonTitle: lesson.title,
+          stepContext: currentStep ? (currentStep.label || currentStep.speech) : ''
+        })
+      });
+      const data = await r.json();
+      const answer = data.answer || 'لم أتمكن من الحصول على جواب حالياً.';
+
+      const replyCard = document.createElement('div');
+      replyCard.className = 'board-card p-4 sm:p-5 rounded-2xl border-r-4 border-amber-400 step-card-enter';
+      replyCard.innerHTML = `
+        <div class="text-xs font-extrabold text-amber-300 mb-1">💬 جواب الأستاذ على سؤالك: "${msg}"</div>
+        <p class="text-xs sm:text-sm leading-relaxed whitespace-pre-line" data-type="1">${answer}</p>
+      `;
+      liveContentStream.appendChild(replyCard);
+      boardCanvas.scrollTop = boardCanvas.scrollHeight;
+
+      isPlaying = true;
+      updateControlsUI();
+      typewriteCardElements(replyCard);
+      speakSynchronized(answer);
+    } catch (e) {
+      showToast('وقع مشكل في الاتصال، عاود جرب بعد قليل.');
+    }
+  }
+
+  function appendStudentBubble(msg, statusText) {
+    emptyBoardOverlay.classList.add('hidden');
+    liveContentStream.classList.remove('hidden');
+    const b = document.createElement('div');
+    b.className = 'p-3 rounded-xl bg-sky-500/15 border border-sky-400/30 text-xs sm:text-sm flex items-center justify-between gap-2 step-card-enter';
+    b.innerHTML = `
+      <div><span class="font-extrabold text-sky-300">سؤالك / ردك:</span> <span>${msg}</span></div>
+      <span class="text-[11px] text-amber-300 font-bold">${statusText}</span>
+    `;
+    liveContentStream.appendChild(b);
+    boardCanvas.scrollTop = boardCanvas.scrollHeight;
+  }
+
+  const askForm = document.getElementById('studentAskForm');
+  const studentInput = document.getElementById('studentInput');
+  const quickUnderstoodBtn = document.getElementById('quickUnderstoodBtn');
+  const quickRepeatBtn = document.getElementById('quickRepeatBtn');
+
+  if (askForm && studentInput) {
+    askForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const val = studentInput.value;
+      studentInput.value = '';
+      handleStudentMessage(val);
+    });
+  }
+
+  if (quickUnderstoodBtn) {
+    quickUnderstoodBtn.addEventListener('click', () => {
+      handleStudentMessage('راه فهمت');
+    });
+  }
+
+  if (quickRepeatBtn) {
+    quickRepeatBtn.addEventListener('click', () => {
+      handleStudentMessage('عاود');
+    });
+  }
+
+  document.getElementById('playPauseBtn').addEventListener('click', (e) => {
+    if (isPlaying && audio && !audio.ended) {
+      e.stopImmediatePropagation();
+      audio.pause();
+      isPlaying = false;
+      updateControlsUI();
+      setSpeakingUI(false);
+      teacherStatusText.textContent = 'متوقف مؤقتاً';
+    } else if (!isPlaying && audio && audio.paused && !audio.ended && audio.currentTime > 0) {
+      e.stopImmediatePropagation();
+      isPlaying = true;
+      audio.play();
+      updateControlsUI();
+      setSpeakingUI(true);
+    }
+  }, true);
+
+  ['prevStepBtn', 'nextStepBtn'].forEach((id) =>
+    document.getElementById(id).addEventListener('click', () => {
+      awaitingComprehension = false;
+      stopAllAudio();
+    }, true)
+  );
+
+  document.getElementById('speechRateSelect').addEventListener('change', () => {
+    if (audio) audio.playbackRate = speechRate;
+  });
+})();
