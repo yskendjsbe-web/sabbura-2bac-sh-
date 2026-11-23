@@ -10,7 +10,7 @@ module.exports = async (req, res) => {
   const text = String((req.body && req.body.text) || '').trim();
   if (!text || text.length > 1200) return res.status(400).json({ error: 'Bad text' });
 
-  const models = [process.env.GEMINI_TTS_MODEL, 'gemini-2.5-flash-preview-tts', 'gemini-2.5-pro-preview-tts'].filter(Boolean);
+  const models = [process.env.GEMINI_TTS_MODEL, 'gemini-3.1-flash-tts-preview', 'gemini-2.5-flash-preview-tts', 'gemini-2.5-pro-preview-tts'].filter(Boolean);
   const voice = process.env.GEMINI_VOICE || 'Charon'; // أصوات رجالية: Charon, Orus, Fenrir, Algenib
 
   const prompt =
