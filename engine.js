@@ -3,6 +3,10 @@
   'use strict';
   const cache = new Map(), exCache = new Map();
   let session = 0, flow = 0, raf = 0, audio = null, cancelSay = null, askResolve = null;
+  const DEF = { writeSpeed: 1, writeLead: 0, speechRate: 1, pauseMs: 500, detail: 'normal', notes: [] };
+  let cfg = Object.assign({}, DEF, (() => { try { return JSON.parse(localStorage.getItem('sb_cfg') || '{}'); } catch (e) { return {}; } })());
+  const saveCfg = () => { try { localStorage.setItem('sb_cfg', JSON.stringify(cfg)); } catch (e) {} };
+  const clamp = (v, a, b) => Math.min(b, Math.max(a, Number(v)));
   const ASK_PHRASE = 'هل فهمتَ هذه النقطة؟ إن فهمتَ فاضغط فهمت لننتقل إلى التالية، وإن لم تفهم فاضغط عاود، أو اكتب سؤالك في الأسفل.';
 
   const st = document.createElement('style');
@@ -23,10 +27,14 @@
   voiceEngineMode = 'gemini';
 
   // ---------- شبكة ----------
-  async function post(url, body) {
-    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    if (!r.ok) { const e = new Error(url + ' ' + r.status); e.status = r.status; throw e; }
-    return r;
+  async function post(url, body, ms = 30000) {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), ms);
+    try {
+      const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: ac.signal });
+      if (!r.ok) { const er = new Error(url + ' ' + r.status); er.status = r.status; throw er; }
+      return r;
+    } finally { clearTimeout(t); }
   }
   const ai = async (action, payload) => (await post('/api/ai', { action, ...payload })).json();
 
@@ -103,7 +111,7 @@
   function finishReveal(p) { p.spans.forEach((s) => s.classList.add('on')); p.shown = p.spans.length; pen.remove(); }
   function runSync(p, getFrac) {
     cancelAnimationFrame(raf);
-    const tick = () => { reveal(p, Math.min(1, getFrac() / 0.93)); raf = requestAnimationFrame(tick); };
+    const tick = () => { reveal(p, Math.min(1, Math.max(0, getFrac() + cfg.writeLead) / clamp(0.93 / cfg.writeSpeed, 0.3, 1))); raf = requestAnimationFrame(tick); };
     tick();
   }
   function timerClock(durMs) {
@@ -148,7 +156,7 @@
         if (p) finishReveal(p);
         setSpeakingUI(false);
         cancelSay = null;
-        setTimeout(() => resolve(true), 500);
+        setTimeout(() => resolve(true), cfg.pauseMs);
       };
       let url = null;
       if (voiceEngineMode === 'gemini') {
@@ -190,14 +198,14 @@
 
   // ---------- الشرح المفصل ----------
   function getExplain(lIdx, idx, mode) {
-    const key = lIdx + '-' + idx + '-' + mode;
+    const key = [lIdx, idx, mode, cfg.detail, cfg.notes.join('|')].join('-');
     if (!exCache.has(key)) {
       const step = LESSONS[lIdx].steps[idx];
       const d = document.createElement('div');
       d.innerHTML = step.buildHtml();
       const gs = groupBlocks(d).map((g) => textOf(g.items));
       const title = gs.shift() || '';
-      exCache.set(key, ai('explain', { lesson: LESSONS[lIdx].title, title, blocks: gs, mode })
+      exCache.set(key, ai('explain', { lesson: LESSONS[lIdx].title, title, blocks: gs, mode, detail: cfg.detail, notes: cfg.notes })
         .then((r) => r.explanations).catch(() => null)
         .then((v) => { if (!v) exCache.delete(key); return v; }));
     }
@@ -260,6 +268,7 @@
 
     const blocks = prepareBlocks(wrap);
     const exP = blocks.length > 1 ? getExplain(currentLessonIdx, idx, mode) : null;
+    if (exP) exP.then((x) => { if (x && my === flow) prefetchAudio(x[0]); });
     const intro = mode === 'simpler' ? 'حسناً، سأعيد شرح هذه النقطة بطريقة أبسط.' : step.speech;
 
     if (!(await say(intro, blocks[0])) || my !== flow) return;
@@ -305,7 +314,7 @@
     teacherStatusText.textContent = 'الأستاذ يفكر في سؤالك...';
     liveSubtitle.textContent = 'الأستاذ يفكر في سؤالك...';
     let ans;
-    try { ans = (await ai('ask', { question: q, lesson: LESSONS[currentLessonIdx].title, context })).answer; }
+    try { ans = (await ai('ask', { question: q, lesson: LESSONS[currentLessonIdx].title, context, notes: cfg.notes })).answer; }
     catch (e) { ans = 'عذراً، تعذر الوصول إلى الأستاذ الآن. تأكد من الاتصال ومن مفتاح Gemini ثم أعد المحاولة.'; }
     if (my !== flow) return;
     const p = qa.querySelector('p');
@@ -313,6 +322,43 @@
     const st2 = mkState(wrapElement(p));
     if (!(await say(ans, st2)) || my !== flow) return;
     afterChoice(await askBox(wrap), idx, my);
+  }
+
+  // ---------- ضبط الأستاذ بالكلام (بدون تعديل الكود) ----------
+  const TUNE_RE = /(خفف|خفّف|قلل|قصر|قصّر|زيد|كثر|طول|طوّل|سرع|سرّع|بطّ?[ئء]|بطيء|سريع|السرعة|سرعة|الكتابة|كتابة|زمن|زامن|تزامن|الصوت|مزيان|عجبني|ممتاز|بسّط|بسط|أبسط|ابسط|بالتفصيل|مفصل|أمثلة|امثلة|الشرح)/;
+  function setRate(v) {
+    speechRate = v;
+    const rs = document.getElementById('speechRateSelect');
+    if (rs) {
+      if (![...rs.options].some((o) => Number(o.value) === v)) {
+        const o = document.createElement('option');
+        o.value = v; o.textContent = v + 'x'; o.className = 'bg-slate-900';
+        rs.appendChild(o);
+      }
+      rs.value = String(v);
+    }
+    if (audio) audio.playbackRate = v;
+  }
+  async function tuneFlow(t) {
+    showToast('الأستاذ كيفهم ملاحظتك...');
+    let r;
+    try { r = await ai('tune', { message: t, settings: cfg }); } catch (e) { answerQuestion(t); return; }
+    if (!r || r.intent !== 'tune') { answerQuestion(t); return; }
+    const contentChanged = !!(r.detail && r.detail !== cfg.detail) || !!r.addNote || !!r.clearNotes || !!r.reset;
+    if (r.reset) cfg = Object.assign({}, DEF, { notes: [] });
+    if (r.writeSpeed != null) cfg.writeSpeed = clamp(r.writeSpeed, 0.6, 2);
+    if (r.writeLead != null) cfg.writeLead = clamp(r.writeLead, -0.3, 0.3);
+    if (r.speechRate != null) cfg.speechRate = clamp(r.speechRate, 0.6, 1.6);
+    if (r.pauseMs != null) cfg.pauseMs = clamp(r.pauseMs, 200, 3000);
+    if (['brief', 'normal', 'detailed'].includes(r.detail)) cfg.detail = r.detail;
+    if (r.clearNotes) cfg.notes = [];
+    if (r.addNote) cfg.notes = [...cfg.notes, String(r.addNote).slice(0, 200)].slice(-6);
+    saveCfg();
+    setRate(cfg.speechRate);
+    showToast(r.reply || 'تم تعديل الإعدادات');
+    if (contentChanged && r.rerun !== false && currentStepIdx >= 0) {
+      isPlaying = true; updateControlsUI(); runCard(currentStepIdx, 'detailed');
+    }
   }
 
   function classify(t) {
@@ -328,7 +374,8 @@
       if (askResolve) askResolve('again');
       else if (currentStepIdx >= 0) { isPlaying = true; runCard(currentStepIdx, 'simpler'); }
       else showToast('اضغط "ابدأ الشرح" أولاً');
-    } else answerQuestion(t);
+    } else if (TUNE_RE.test(t) && t.length <= 160) tuneFlow(t);
+    else answerQuestion(t);
   }
 
   // شريط التفاعل الموجود في الصفحة
@@ -359,5 +406,6 @@
   }, true);
   ['prevStepBtn', 'nextStepBtn'].forEach((id) =>
     document.getElementById(id).addEventListener('click', () => stopAllAudio(), true));
-  document.getElementById('speechRateSelect').addEventListener('change', () => { if (audio) audio.playbackRate = speechRate; });
+  document.getElementById('speechRateSelect').addEventListener('change', () => { cfg.speechRate = speechRate; saveCfg(); if (audio) audio.playbackRate = speechRate; });
+  setRate(cfg.speechRate);
 })();
