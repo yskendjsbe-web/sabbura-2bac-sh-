@@ -20,11 +20,16 @@ const TUNE_SCHEMA = {
 const notesText = (n) => (Array.isArray(n) && n.length ? '\nتعليمات أسلوب دائمة من التلميذ (التزم بها): ' + n.slice(-6).map((x) => String(x).slice(0, 200)).join(' | ') : '');
 const LEN = { brief: 'بين 120 و300 حرف', normal: 'بين 250 و650 حرفاً', detailed: 'بين 450 و900 حرف' };
 
-const MODELS = [process.env.GEMINI_TEXT_MODEL, 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-2.5-flash'].filter(Boolean);
+const MODELS = [process.env.GEMINI_TEXT_MODEL, 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash'].filter(Boolean);
+
+const RETRY = [429, 500, 503, 504];
+const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
 
 async function gemini(key, prompt, schema) {
   let lastErr = '';
-  for (const model of MODELS) {
+  for (let pass = 0; pass < 2; pass++) {
+   if (pass) await sleep(1500);
+   for (const model of MODELS) {
     for (const think of [true, false]) {
       const generationConfig = { temperature: 0.5 };
       if (think) generationConfig.thinkingConfig = { thinkingLevel: 'low' };
@@ -50,9 +55,10 @@ async function gemini(key, prompt, schema) {
       }
       lastErr = `${model} ${r.status}: ` + (await r.text()).slice(0, 160);
       if (r.status === 400 && think) continue; // ربما لا يدعم إعداد التفكير: نعيد بدونه
-      if (r.status !== 404 && r.status !== 400) throw new Error('Gemini ' + lastErr);
+      if (r.status !== 404 && r.status !== 400 && !RETRY.includes(r.status)) throw new Error('Gemini ' + lastErr);
       break; // نجرب الموديل التالي
     }
+   }
   }
   throw new Error('Gemini ' + lastErr);
 }
