@@ -32,7 +32,7 @@
     const t = setTimeout(() => ac.abort(), ms);
     try {
       const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: ac.signal });
-      if (!r.ok) { const er = new Error(url + ' ' + r.status); er.status = r.status; throw er; }
+      if (!r.ok) { const er = new Error(url + ' ' + r.status); er.status = r.status; try { er.detail = (await r.text()).slice(0, 220); } catch (x) {} throw er; }
       return r;
     } finally { clearTimeout(t); }
   }
@@ -315,7 +315,16 @@
     liveSubtitle.textContent = 'الأستاذ يفكر في سؤالك...';
     let ans;
     try { ans = (await ai('ask', { question: q, lesson: LESSONS[currentLessonIdx].title, context, notes: cfg.notes })).answer; }
-    catch (e) { ans = 'عذراً، تعذر الوصول إلى الأستاذ الآن. تأكد من الاتصال ومن مفتاح Gemini ثم أعد المحاولة.'; }
+    catch (e) {
+      if (my !== flow) return;
+      const hint = e.status === 404 ? 'الملف api/ai.js غير منشور بعد على Vercel.'
+        : e.status === 500 ? 'مفتاح GEMINI_API_KEY غير مضاف، أو لم تعمل Redeploy بعد إضافته.'
+        : e.status ? 'مشكل عند Gemini: ' + (e.detail || '') : 'تحقق من الاتصال بالإنترنت.';
+      qa.querySelector('p').textContent = 'تعذر الوصول إلى الأستاذ (' + (e.status || 'شبكة') + '). ' + hint;
+      isPlaying = false; updateControlsUI();
+      teacherStatusText.textContent = 'خطأ في الاتصال';
+      return;
+    }
     if (my !== flow) return;
     const p = qa.querySelector('p');
     p.textContent = ans;
