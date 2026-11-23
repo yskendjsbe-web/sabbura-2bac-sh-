@@ -2,287 +2,261 @@
   'use strict';
 
   let session = 0;
-  let raf = 0;
-  let audio = null;
-  let prep = null;
+  let wordTimer = null;
+  let activePrep = null;
   let awaitingComprehension = false;
 
-  const st = document.createElement('style');
-  st.textContent = '.w{opacity:0;transition:opacity .12s}.w.on{opacity:1}';
-  document.head.appendChild(st);
+  const styleTag = document.createElement('style');
+  styleTag.textContent = '.w{opacity:0;transition:opacity .18s ease}.w.on{opacity:1}';
+  document.head.appendChild(styleTag);
 
   const pen = document.createElement('span');
   pen.className = 'active-pen-cursor';
   pen.textContent = '✍️';
 
-  const sel = document.getElementById('voiceEngineSelect');
-  if (sel) {
-    sel.innerHTML =
-      '<option value="auto" class="bg-slate-900">صوت عربي تلقائي (مضمون)</option>' +
-      '<option value="browser" class="bg-slate-900">صوت المتصفح فقط</option>' +
-      '<option value="cloud" class="bg-slate-900">صوت سحابي عربي</option>';
+  const voiceSelect = document.getElementById('voiceEngineSelect');
+  if (voiceSelect) {
+    voiceSelect.innerHTML =
+      '<option value="browser" selected class="bg-slate-900">صوت المتصفح العربي</option>' +
+      '<option value="silent" class="bg-slate-900">كتابة فقط (بدون صوت)</option>';
   }
-  voiceEngineMode = 'auto';
+  voiceEngineMode = 'browser';
+
+  function stopWordTimer() {
+    if (wordTimer) {
+      clearInterval(wordTimer);
+      wordTimer = null;
+    }
+    pen.remove();
+  }
 
   window.typewriteCardElements = function (card) {
+    stopWordTimer();
     const spans = [];
+
     card.querySelectorAll('[data-type="1"]').forEach((el) => {
       const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-      const nodes = [];
-      while (walker.nextNode()) nodes.push(walker.currentNode);
-      nodes.forEach((n) => {
+      const textNodes = [];
+      while (walker.nextNode()) textNodes.push(walker.currentNode);
+
+      textNodes.forEach((node) => {
         const frag = document.createDocumentFragment();
-        n.textContent.split(/(\s+)/).forEach((part) => {
+        node.textContent.split(/(\s+)/).forEach((part) => {
           if (!part) return;
-          if (/^\s+$/.test(part)) return frag.appendChild(document.createTextNode(part));
-          const s = document.createElement('span');
-          s.className = 'w';
-          s.textContent = part;
-          frag.appendChild(s);
-          spans.push(s);
+          if (/^\s+$/.test(part)) {
+            frag.appendChild(document.createTextNode(part));
+          } else {
+            const span = document.createElement('span');
+            span.className = 'w';
+            span.textContent = part;
+            frag.appendChild(span);
+            spans.push(span);
+          }
         });
-        n.replaceWith(frag);
+        node.replaceWith(frag);
       });
     });
-    prep = { spans, total: spans.length || 1, shown: 0 };
+
+    activePrep = {
+      spans,
+      index: 0
+    };
   };
 
-  function startWordWriter(p, stepMs = 130) {
-    cancelAnimationFrame(raf);
-    if (!p || !p.spans.length) return;
-    let last = performance.now();
-
-    const tick = (now) => {
-      if (isPlaying && now - last >= stepMs) {
-        last = now;
-        if (p.shown < p.spans.length) {
-          const s = p.spans[p.shown++];
-          s.classList.add('on');
-          s.after(pen);
-          if (p.shown % 4 === 0) playChalkTick();
-          boardCanvas.scrollTop = boardCanvas.scrollHeight;
-        }
-      }
-      if (p.shown < p.spans.length) {
-        raf = requestAnimationFrame(tick);
-      } else {
-        pen.remove();
-      }
-    };
-    raf = requestAnimationFrame(tick);
+  function revealRemainingWords(prepObj) {
+    if (!prepObj || !prepObj.spans) return;
+    for (let i = prepObj.index; i < prepObj.spans.length; i++) {
+      prepObj.spans[i].classList.add('on');
+    }
+    prepObj.index = prepObj.spans.length;
+    pen.remove();
   }
 
-  function finishReveal(p) {
-    if (!p) return;
-    p.spans.forEach((s) => s.classList.add('on'));
-    p.shown = p.spans.length;
-    pen.remove();
+  function startSlowWordByWord(prepObj) {
+    stopWordTimer();
+    if (!prepObj || !prepObj.spans.length) return;
+
+    // سرعة كتابة هادئة ومريحة للعين: حوالي 220ms لكل كلمة في 1.0x
+    const intervalMs = Math.max(110, Math.round(220 / (speechRate || 1)));
+
+    wordTimer = setInterval(() => {
+      if (!isPlaying) return;
+
+      if (prepObj.index >= prepObj.spans.length) {
+        stopWordTimer();
+        return;
+      }
+
+      const currentSpan = prepObj.spans[prepObj.index++];
+      currentSpan.classList.add('on');
+      currentSpan.after(pen);
+
+      if (prepObj.index % 3 === 0 && typeof playChalkTick === 'function') {
+        playChalkTick();
+      }
+      if (typeof boardCanvas !== 'undefined' && boardCanvas) {
+        boardCanvas.scrollTop = boardCanvas.scrollHeight;
+      }
+    }, intervalMs);
   }
 
   window.stopAllAudio = function () {
     session++;
-    cancelAnimationFrame(raf);
+    stopWordTimer();
     clearTimeout(nextStepTimeout);
     try {
-      if ('speechSynthesis' in window) speechSynthesis.cancel();
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
     } catch (e) {}
-    if (audio) {
-      audio.onended = audio.onerror = null;
-      try {
-        audio.pause();
-        audio.src = '';
-      } catch (e) {}
-      audio = null;
-    }
-    pen.remove();
     setSpeakingUI(false);
   };
 
-  const origClear = clearTypingAndTimers;
+  const baseClear = typeof clearTypingAndTimers === 'function' ? clearTypingAndTimers : () => {};
   window.clearTypingAndTimers = function () {
-    origClear();
-    cancelAnimationFrame(raf);
-    pen.remove();
+    baseClear();
+    stopWordTimer();
   };
 
-  function splitArabicText(text, maxLen = 140) {
-    const parts = text.split(/([.،!؟:؛])/);
-    const chunks = [];
-    let cur = '';
-    for (const part of parts) {
-      if ((cur + part).length <= maxLen) {
-        cur += part;
-      } else {
-        if (cur.trim()) chunks.push(cur.trim());
-        cur = part;
-      }
-    }
-    if (cur.trim()) chunks.push(cur.trim());
-    return chunks.length ? chunks : [text.slice(0, maxLen)];
-  }
-
-  function playArabicCloud(text, mySession, p, onDone) {
-    const chunks = splitArabicText(text, 140);
-    let idx = 0;
-
-    function nextChunk() {
-      if (mySession !== session || !isPlaying) return;
-      if (idx >= chunks.length) {
-        finishReveal(p);
-        setSpeakingUI(false);
-        if (onDone) onDone();
-        return;
-      }
-      const chunk = chunks[idx++];
-      const url = `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=ar&q=${encodeURIComponent(chunk)}`;
-      const a = new Audio(url);
-      a.playbackRate = speechRate;
-      audio = a;
-
-      setSpeakingUI(true);
-      a.onended = () => nextChunk();
-      a.onerror = () => {
-        const waitMs = Math.max(2400, (chunk.length * 60) / speechRate);
-        nextStepTimeout = setTimeout(nextChunk, waitMs);
-      };
-      a.play().catch(() => {
-        const waitMs = Math.max(2400, (chunk.length * 60) / speechRate);
-        nextStepTimeout = setTimeout(nextChunk, waitMs);
-      });
-    }
-
-    nextChunk();
-  }
-
-  function tryBrowserArabic(text, mySession, p, onDone) {
-    if (!('speechSynthesis' in window)) {
-      playArabicCloud(text, mySession, p, onDone);
-      return;
-    }
-
-    const voices = speechSynthesis.getVoices().filter((v) => /^ar/i.test(v.lang));
-    if (!voices.length && voiceEngineMode === 'auto') {
-      playArabicCloud(text, mySession, p, onDone);
-      return;
-    }
-
-    let started = false;
-    const u = new SpeechSynthesisUtterance(text);
-    const chosen =
-      voices.find((v) => /majed|maged|naayf|tarik|hamed|male/i.test(v.name)) || voices[0];
-
-    u.lang = chosen ? chosen.lang : 'ar-SA';
-    if (chosen) u.voice = chosen;
-    u.rate = speechRate;
-
-    const fallbackTimer = setTimeout(() => {
-      if (!started && mySession === session && isPlaying) {
-        try {
-          speechSynthesis.cancel();
-        } catch (e) {}
-        playArabicCloud(text, mySession, p, onDone);
-      }
-    }, 1000);
-
-    u.onstart = () => {
-      started = true;
-      clearTimeout(fallbackTimer);
-      if (mySession === session) setSpeakingUI(true);
-    };
-
-    u.onend = () => {
-      clearTimeout(fallbackTimer);
-      if (mySession !== session) return;
-      finishReveal(p);
-      setSpeakingUI(false);
-      if (isPlaying && onDone) {
-        nextStepTimeout = setTimeout(onDone, 650);
-      }
-    };
-
-    u.onerror = () => {
-      clearTimeout(fallbackTimer);
-      if (mySession === session && isPlaying) {
-        playArabicCloud(text, mySession, p, onDone);
-      }
-    };
-
-    try {
-      speechSynthesis.speak(u);
-    } catch (e) {
-      clearTimeout(fallbackTimer);
-      playArabicCloud(text, mySession, p, onDone);
-    }
+  function pickArabicVoice() {
+    if (!('speechSynthesis' in window)) return null;
+    const allVoices = window.speechSynthesis.getVoices() || [];
+    const arVoices = allVoices.filter((v) => /^ar/i.test(v.lang));
+    if (!arVoices.length) return null;
+    return (
+      arVoices.find((v) => /majed|maged|naayf|tarik|hamed|salma|layla|male|arabic/i.test(v.name)) ||
+      arVoices[0]
+    );
   }
 
   window.speakSynchronized = function (text, onDone) {
     stopAllAudio();
     const mySession = session;
-    liveSubtitle.textContent = text;
 
-    const p = prep;
-    prep = null;
+    if (typeof liveSubtitle !== 'undefined' && liveSubtitle) {
+      liveSubtitle.textContent = text;
+    }
 
-    const stepMs = Math.max(95, Math.round(135 / speechRate));
-    if (p) startWordWriter(p, stepMs);
+    const prepObj = activePrep;
+    activePrep = null;
 
-    const finishStep = () => {
+    if (prepObj) {
+      startSlowWordByWord(prepObj);
+    }
+
+    const markStepReadyForStudent = () => {
       if (mySession !== session) return;
-      cancelAnimationFrame(raf);
-      finishReveal(p);
+      revealRemainingWords(prepObj);
+      stopWordTimer();
       setSpeakingUI(false);
       awaitingComprehension = true;
       isPlaying = false;
-      updateControlsUI();
-      teacherStatusText.textContent = 'في انتظار ردك: "راه فهمت" أو سؤالك';
+      if (typeof updateControlsUI === 'function') updateControlsUI();
+      if (typeof teacherStatusText !== 'undefined' && teacherStatusText) {
+        teacherStatusText.textContent = 'في انتظار ردك: "راه فهمت" أو سؤالك';
+      }
       const promptEl = document.getElementById('comprehensionPrompt');
       if (promptEl) {
         promptEl.textContent =
           '❓ واش فهمتي هاد الجزء ولا نعاود نشرحو ليك؟ اكتب "راه فهمت" أو سول على أي حاجة.';
       }
-      if (onDone) onDone();
+      if (typeof onDone === 'function') onDone();
     };
 
-    if (voiceEngineMode === 'cloud') {
-      playArabicCloud(text, mySession, p, finishStep);
-    } else {
-      tryBrowserArabic(text, mySession, p, finishStep);
+    const wordsCount = String(text || '').trim().split(/\s+/).filter(Boolean).length;
+    const minWaitMs = Math.max(4500, Math.round((wordsCount * 240) / (speechRate || 1)));
+
+    if (voiceEngineMode === 'silent' || !('speechSynthesis' in window)) {
+      setSpeakingUI(true);
+      nextStepTimeout = setTimeout(markStepReadyForStudent, minWaitMs);
+      return;
+    }
+
+    const voice = pickArabicVoice();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = voice ? voice.lang : 'ar-SA';
+    if (voice) utterance.voice = voice;
+    utterance.rate = speechRate || 1;
+
+    let finished = false;
+    const safeFinish = () => {
+      if (finished || mySession !== session) return;
+      finished = true;
+      clearTimeout(safetyTimer);
+      markStepReadyForStudent();
+    };
+
+    // مؤقت أمان باش الكتابة تكمل بهدوء حتى لو أنهى المتصفح الصوت مبكراً
+    const safetyTimer = setTimeout(safeFinish, minWaitMs);
+
+    utterance.onstart = () => {
+      if (mySession === session) setSpeakingUI(true);
+    };
+
+    utterance.onend = () => {
+      // نترك الكتابة تكمل حتى نهاية مؤقت الأمان إذا كانت باقا ما كملتش
+      if (!prepObj || prepObj.index >= prepObj.spans.length) {
+        safeFinish();
+      }
+    };
+
+    utterance.onerror = () => {
+      if (!voice && typeof showToast === 'function') {
+        showToast('ما كاينش صوت عربي في المتصفح؛ الكتابة مستمرة بهدوء.');
+      }
+    };
+
+    try {
+      setSpeakingUI(true);
+      window.speechSynthesis.speak(utterance);
+    } catch (e) {
+      nextStepTimeout = setTimeout(safeFinish, minWaitMs);
     }
   };
 
-  document.getElementById('playPauseBtn').addEventListener(
-    'click',
-    (e) => {
-      if (isPlaying && audio && !audio.ended) {
-        e.stopImmediatePropagation();
-        audio.pause();
-        isPlaying = false;
-        updateControlsUI();
-        setSpeakingUI(false);
-        teacherStatusText.textContent = 'متوقف مؤقتاً';
-      } else if (!isPlaying && audio && audio.paused && !audio.ended && audio.currentTime > 0) {
-        e.stopImmediatePropagation();
-        isPlaying = true;
-        audio.play();
-        updateControlsUI();
-        setSpeakingUI(true);
-      }
-    },
-    true
-  );
+  if ('speechSynthesis' in window) {
+    window.speechSynthesis.onvoiceschanged = () => {
+      window.speechSynthesis.getVoices();
+    };
+  }
 
-  ['prevStepBtn', 'nextStepBtn'].forEach((id) =>
-    document.getElementById(id).addEventListener(
+  const playBtn = document.getElementById('playPauseBtn');
+  if (playBtn) {
+    playBtn.addEventListener(
       'click',
-      () => {
-        awaitingComprehension = false;
-        stopAllAudio();
+      (e) => {
+        if (isPlaying && 'speechSynthesis' in window && window.speechSynthesis.speaking && !window.speechSynthesis.paused) {
+          e.stopImmediatePropagation();
+          try { window.speechSynthesis.pause(); } catch (err) {}
+          isPlaying = false;
+          if (typeof updateControlsUI === 'function') updateControlsUI();
+          setSpeakingUI(false);
+          if (typeof teacherStatusText !== 'undefined' && teacherStatusText) {
+            teacherStatusText.textContent = 'متوقف مؤقتاً';
+          }
+        } else if (!isPlaying && 'speechSynthesis' in window && window.speechSynthesis.paused) {
+          e.stopImmediatePropagation();
+          try { window.speechSynthesis.resume(); } catch (err) {}
+          isPlaying = true;
+          if (typeof updateControlsUI === 'function') updateControlsUI();
+          setSpeakingUI(true);
+        }
       },
       true
-    )
-  );
+    );
+  }
 
-  document.getElementById('speechRateSelect').addEventListener('change', () => {
-    if (audio) audio.playbackRate = speechRate;
+  ['prevStepBtn', 'nextStepBtn'].forEach((id) => {
+    const btn = document.getElementById(id);
+    if (btn) {
+      btn.addEventListener(
+        'click',
+        () => {
+          awaitingComprehension = false;
+          window.stopAllAudio();
+        },
+        true
+      );
+    }
   });
 })();
