@@ -38,12 +38,13 @@ async function gemini(key, prompt, schema) {
       }),
     }
   );
-  if (!r.ok) throw new Error('Gemini ' + r.status);
+  if (!r.ok) throw new Error('Gemini ' + r.status + ': ' + (await r.text()).slice(0, 200));
   const d = await r.json();
   return (d?.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
 }
 
 module.exports = async (req, res) => {
+  if (req.method === 'GET') return res.status(200).json({ ok: true, hasKey: !!process.env.GEMINI_API_KEY, model: MODEL });
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
   const key = process.env.GEMINI_API_KEY;
   if (!key) return res.status(500).json({ error: 'Missing GEMINI_API_KEY' });
