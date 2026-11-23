@@ -1,6 +1,7 @@
 // Vercel Serverless Function: يحوّل النص إلى صوت رجالي عبر Gemini TTS
 // المفتاح يبقى في الخادم فقط (متغير بيئة GEMINI_API_KEY) ولا يظهر للمتصفح.
 module.exports = async (req, res) => {
+  if (req.method === 'GET') return res.status(200).json({ ok: true, hasKey: !!process.env.GEMINI_API_KEY });
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
 
   const key = process.env.GEMINI_API_KEY;
