@@ -35,7 +35,7 @@ module.exports = async (req, res) => {
       );
       if (r.ok) break;
       lastErr = model + ': ' + (await r.text()).slice(0, 300);
-      if (r.status !== 404 && r.status !== 400) break;
+      if (![404, 400, 429, 500, 503, 504].includes(r.status)) break;
     }
     if (!r.ok) return res.status(r.status === 429 ? 429 : 502).json({ error: 'Gemini error', status: r.status, detail: lastErr });
 
