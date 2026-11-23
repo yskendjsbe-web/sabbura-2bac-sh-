@@ -20,31 +20,45 @@ const TUNE_SCHEMA = {
 const notesText = (n) => (Array.isArray(n) && n.length ? '\nتعليمات أسلوب دائمة من التلميذ (التزم بها): ' + n.slice(-6).map((x) => String(x).slice(0, 200)).join(' | ') : '');
 const LEN = { brief: 'بين 120 و300 حرف', normal: 'بين 250 و650 حرفاً', detailed: 'بين 450 و900 حرف' };
 
+const MODELS = [process.env.GEMINI_TEXT_MODEL, 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-2.5-flash'].filter(Boolean);
+
 async function gemini(key, prompt, schema) {
-  const generationConfig = { temperature: 0.5, thinkingConfig: { thinkingBudget: 0 } };
-  if (schema) {
-    generationConfig.responseMimeType = 'application/json';
-    generationConfig.responseSchema = schema;
-  }
-  const r = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: SYS }] },
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig,
-      }),
+  let lastErr = '';
+  for (const model of MODELS) {
+    for (const think of [true, false]) {
+      const generationConfig = { temperature: 0.5 };
+      if (think) generationConfig.thinkingConfig = { thinkingLevel: 'low' };
+      if (schema) {
+        generationConfig.responseMimeType = 'application/json';
+        generationConfig.responseSchema = schema;
+      }
+      const r = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: SYS }] },
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig,
+          }),
+        }
+      );
+      if (r.ok) {
+        const d = await r.json();
+        return (d?.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
+      }
+      lastErr = `${model} ${r.status}: ` + (await r.text()).slice(0, 160);
+      if (r.status === 400 && think) continue; // ربما لا يدعم إعداد التفكير: نعيد بدونه
+      if (r.status !== 404 && r.status !== 400) throw new Error('Gemini ' + lastErr);
+      break; // نجرب الموديل التالي
     }
-  );
-  if (!r.ok) throw new Error('Gemini ' + r.status + ': ' + (await r.text()).slice(0, 200));
-  const d = await r.json();
-  return (d?.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
+  }
+  throw new Error('Gemini ' + lastErr);
 }
 
 module.exports = async (req, res) => {
-  if (req.method === 'GET') return res.status(200).json({ ok: true, hasKey: !!process.env.GEMINI_API_KEY, model: MODEL });
+  if (req.method === 'GET') return res.status(200).json({ ok: true, hasKey: !!process.env.GEMINI_API_KEY, models: MODELS });
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
   const key = process.env.GEMINI_API_KEY;
   if (!key) return res.status(500).json({ error: 'Missing GEMINI_API_KEY' });
