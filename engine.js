@@ -3,7 +3,7 @@
   'use strict';
   const cache = new Map(), exCache = new Map();
   let session = 0, flow = 0, raf = 0, audio = null, cancelSay = null, askResolve = null;
-  let audioBlocked = false, wdTimer = 0, ttsRetry = 0, pendingRetry = null;
+  let audioBlocked = false, wdTimer = 0, ttsRetry = 0, pendingRetry = null, quotaHit = false;
   const player = new Audio();
   player.preload = 'auto';
   const SILENT = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAA==';
@@ -67,7 +67,7 @@
             const b = await (await post('/api/tts', { text }, 50000)).blob();
             if (b.size < 2000) throw new Error('audio too short');
             return URL.createObjectURL(b);
-          } catch (er) { lastErr = er; ttsRetry = i + 1; if (er.status === 401 || er.status === 403) break; }
+          } catch (er) { lastErr = er; ttsRetry = i + 1; if (er.status === 401 || er.status === 403 || er.status === 429) break; }
         }
         throw lastErr;
       })();
@@ -201,11 +201,13 @@
           teacherStatusText.textContent = ttsRetry ? 'الصوت يتأخر... إعادة المحاولة (' + ttsRetry + ')' : 'الأستاذ يحضّر الصوت... ' + s + ' ث';
         }, 500);
         try { url = await fetchAudio(text); }
-        catch (er) { showToast('تعذّر صوت Gemini (' + (er.status || 'شبكة') + ')' + (er.detail ? ': ' + er.detail.slice(0, 90) : '')); }
+        catch (er) {
+          if (er.status === 429) { quotaHit = true; voiceEngineMode = 'browser'; const s2 = document.getElementById('voiceEngineSelect'); if (s2) s2.value = 'browser'; showToast('حصة صوت Gemini المجانية انتهت. تم التحويل إلى صوت المتصفح (جرّب Microsoft Edge لأصوات عربية طبيعية).'); }
+          else showToast('تعذّر صوت Gemini (' + (er.status || 'شبكة') + ')' + (er.detail ? ': ' + er.detail.slice(0, 90) : '')); }
         clearInterval(waitIv);
       }
       if (ses !== session) return;
-      if (!url && !('speechSynthesis' in window && speechSynthesis.getVoices().some((v) => /^ar/i.test(v.lang)))) {
+      if (!url && !quotaHit && !('speechSynthesis' in window && speechSynthesis.getVoices().some((v) => /^ar/i.test(v.lang)))) {
         isPlaying = false; updateControlsUI();
         teacherStatusText.textContent = 'تعذّر الصوت: اضغط «استئناف الشرح» لإعادة المحاولة';
         pendingRetry = () => { pendingRetry = null; cancelSay = null; isPlaying = true; updateControlsUI(); say(text, p).then(resolve); };
