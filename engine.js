@@ -3,7 +3,7 @@
   'use strict';
   const cache = new Map(), exCache = new Map();
   let session = 0, flow = 0, raf = 0, audio = null, cancelSay = null, askResolve = null;
-  let audioBlocked = false, wdTimer = 0, ttsRetry = 0;
+  let audioBlocked = false, wdTimer = 0, ttsRetry = 0, pendingRetry = null;
   const player = new Audio();
   player.preload = 'auto';
   const SILENT = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAA==';
@@ -163,6 +163,7 @@
     try { speechSynthesis.cancel(); } catch (e) {}
     clearInterval(wdTimer);
     audioBlocked = false;
+    pendingRetry = null;
     player.onended = player.onerror = player.onplay = null;
     try { player.pause(); } catch (e) {}
     audio = null;
@@ -194,12 +195,22 @@
       };
       let url = null;
       if (voiceEngineMode === 'gemini') {
-        const waitIv = setInterval(() => { if (ttsRetry) teacherStatusText.textContent = 'الصوت يتأخر... إعادة المحاولة (' + ttsRetry + ')'; }, 600);
+        const t0 = Date.now();
+        const waitIv = setInterval(() => {
+          const s = Math.round((Date.now() - t0) / 1000);
+          teacherStatusText.textContent = ttsRetry ? 'الصوت يتأخر... إعادة المحاولة (' + ttsRetry + ')' : 'الأستاذ يحضّر الصوت... ' + s + ' ث';
+        }, 500);
         try { url = await fetchAudio(text); }
-        catch (er) { showToast('تعذّر صوت Gemini (' + (er.status || 'شبكة') + ')، تم التحويل لصوت المتصفح'); }
+        catch (er) { showToast('تعذّر صوت Gemini (' + (er.status || 'شبكة') + ')' + (er.detail ? ': ' + er.detail.slice(0, 90) : '')); }
         clearInterval(waitIv);
       }
       if (ses !== session) return;
+      if (!url && !('speechSynthesis' in window && speechSynthesis.getVoices().some((v) => /^ar/i.test(v.lang)))) {
+        isPlaying = false; updateControlsUI();
+        teacherStatusText.textContent = 'تعذّر الصوت: اضغط «استئناف الشرح» لإعادة المحاولة';
+        pendingRetry = () => { pendingRetry = null; cancelSay = null; isPlaying = true; updateControlsUI(); say(text, p).then(resolve); };
+        return;
+      }
       if (url) {
         let retried = false;
         audio = player;
@@ -360,11 +371,19 @@
       blocks[i].el.classList.add('hl');
       blocks[i].el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       if (ex && ex[i]) prefetchAudio(ex[i]);
+      if (i === blocks.length - 1) {
+        prefetchAudio(ASK_PHRASE);
+        const nx = lesson.steps[idx + 1];
+        if (nx) {
+          prefetchAudio(clean(nx.speech));
+          const nxE = getExplain(currentLessonIdx, idx + 1, 'detailed');
+          if (nxE) nxE.then((x) => { if (x) prefetchAudio(x[0]); });
+        }
+      }
       const text = (ex && ex[i - 1]) || blocks[i].text;
       if (!(await say(text, blocks[i])) || my !== flow) return;
     }
     finishCardInstantly(wrap);
-    if (idx + 1 < lesson.steps.length) getExplain(currentLessonIdx, idx + 1, 'detailed');
     const choice = await askBox(wrap);
     afterChoice(choice, idx, my);
   }
@@ -481,7 +500,9 @@
 
   // ---------- أزرار التحكم ----------
   document.getElementById('playPauseBtn').addEventListener('click', (e) => {
+    if (pendingRetry) { e.stopImmediatePropagation(); pendingRetry(); return; }
     if (askResolve) { e.stopImmediatePropagation(); showToast('الأستاذ ينتظر جوابك: فهمت أو عاود'); return; }
+    if (isPlaying && !audio && cancelSay) { e.stopImmediatePropagation(); showToast('لحظة... الأستاذ يحضّر الصوت'); return; }
     if (isPlaying && audio && !audio.ended) {
       e.stopImmediatePropagation();
       audio.pause(); isPlaying = false; updateControlsUI(); setSpeakingUI(false);
