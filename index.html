@@ -1,16 +1,4 @@
-function speakStable(text, rate = 1.0, onStart, onEnd) {
-  if (!('speechSynthesis' in window)) {
-    if (onEnd) onEnd();
-    return;
-  }
-
-  window.speechSynthesis.cancel();
-
-  // تقسيم النص إلى جمل قصيرة لتفادي توقف المحرك في النصوص الطويلة
-  const chunks = text
-    .split(/(?<=[.،؛؟!:\n])\s+/)
-    .map(s => s.trim())
-    .filter(Boolean);<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="UTF-8" />
@@ -1110,60 +1098,10 @@ function speakStable(text, rate = 1.0, onStart, onEnd) {
   </script>
   <script src="engine.js"></script>
 </body>
-</html>
-
-  if (chunks.length === 0) {
-    if (onEnd) onEnd();
-    return;
-  }
-
-  const voices = window.speechSynthesis.getVoices();
-  const arabicVoice =
-    voices.find(v => v.lang && v.lang.toLowerCase().startsWith('ar')) || null;
-
-  let index = 0;
-  let started = false;
-
-  function playNext() {
-    if (index >= chunks.length) {
-      if (onEnd) onEnd();
-      return;
-    }
-
-    const utterance = new SpeechSynthesisUtterance(chunks[index]);
-    utterance.lang = 'ar-SA';
-    utterance.rate = parseFloat(rate) || 1.0;
-    if (arabicVoice) utterance.voice = arabicVoice;
-
-    utterance.onstart = () => {
-      if (!started) {
-        started = true;
-        if (onStart) onStart();
-      }
-    };
-
-    utterance.onend = () => {
-      index++;
-      playNext();
-    };
-
-    utterance.onerror = () => {
-      index++;
-      playNext();
-    };
-
-    window.speechSynthesis.speak(utterance);
-  }
-
-  // بعض المتصفحات تحتاج لحظة لتحميل الأصوات أول مرة
-  if (voices.length === 0 && 'onvoiceschanged' in window.speechSynthesis) {
-    window.speechSynthesis.onvoiceschanged = () => {
-      playNext();
-    };
-    setTimeout(() => {
-      if (!started && index === 0) playNext();
-    }, 250);
-  } else {
-    playNext();
-  }
-}
+</html><select id="voiceEngineSelect" class="bg-slate-800 text-xs font-bold text-emerald-300 rounded-xl px-2.5 py-1.5 border border-slate-700 cursor-pointer" title="محرك النطق العربي">
+        <option value="auto" class="bg-slate-900">محرك الصوت: تلقائي ذكي</option>
+        <option value="browser" class="bg-slate-900">صوت المتصفح (Web Speech)</option>
+        <option value="cloud" class="bg-slate-900">صوت سحابي (Google TTS)</option>
+      </select>
+    </div>
+  </header>
