@@ -3,6 +3,24 @@
   'use strict';
   const cache = new Map(), exCache = new Map();
   let session = 0, flow = 0, raf = 0, audio = null, cancelSay = null, askResolve = null;
+  let audioBlocked = false, wdTimer = 0, ttsRetry = 0;
+  const player = new Audio();
+  player.preload = 'auto';
+  const SILENT = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAA==';
+  const unlockAudio = () => {
+    document.removeEventListener('pointerdown', unlockAudio, true);
+    document.removeEventListener('keydown', unlockAudio, true);
+    if (!audio) { player.src = SILENT; player.play().catch(() => {}); }
+  };
+  document.addEventListener('pointerdown', unlockAudio, true);
+  document.addEventListener('keydown', unlockAudio, true);
+  const clean = (t) => {
+    const s = String(t || '')
+      .replace(/يا\s+(?:بنيّ|بني|بُنيّ|بنيَّ|ابني|تلميذي|عزيزي|بطل)\s*[،,:]?\s*/g, '')
+      .replace(/[^.؟!\n]*(?:سوف\s+|س)أعود[^.؟!\n]*[.؟!]?/g, '')
+      .replace(/\s{2,}/g, ' ').trim();
+    return s;
+  };
   const DEF = { writeSpeed: 1, writeLead: 0, speechRate: 1, pauseMs: 500, detail: 'normal', notes: [] };
   let cfg = Object.assign({}, DEF, (() => { try { return JSON.parse(localStorage.getItem('sb_cfg') || '{}'); } catch (e) { return {}; } })());
   const saveCfg = () => { try { localStorage.setItem('sb_cfg', JSON.stringify(cfg)); } catch (e) {} };
@@ -41,8 +59,17 @@
   function fetchAudio(text) {
     if (!cache.has(text)) {
       const p = (async () => {
-        try { return URL.createObjectURL(await (await post('/api/tts', { text })).blob()); }
-        catch (e) { await new Promise((ok) => setTimeout(ok, 800)); return URL.createObjectURL(await (await post('/api/tts', { text })).blob()); }
+        const waits = [0, 1500, 3500, 7000];
+        let lastErr;
+        for (let i = 0; i < waits.length; i++) {
+          if (waits[i]) await new Promise((ok) => setTimeout(ok, waits[i]));
+          try {
+            const b = await (await post('/api/tts', { text }, 50000)).blob();
+            if (b.size < 2000) throw new Error('audio too short');
+            return URL.createObjectURL(b);
+          } catch (er) { lastErr = er; ttsRetry = i + 1; if (er.status === 401 || er.status === 403) break; }
+        }
+        throw lastErr;
       })();
       p.catch(() => cache.delete(text));
       cache.set(text, p);
@@ -134,7 +161,11 @@
     clearTimeout(nextStepTimeout);
     if (cancelSay) { const c = cancelSay; cancelSay = null; c(); }
     try { speechSynthesis.cancel(); } catch (e) {}
-    if (audio) { audio.onended = audio.onerror = audio.onplay = null; try { audio.pause(); } catch (e) {} audio = null; }
+    clearInterval(wdTimer);
+    audioBlocked = false;
+    player.onended = player.onerror = player.onplay = null;
+    try { player.pause(); } catch (e) {}
+    audio = null;
     pen.remove();
     setSpeakingUI(false);
   }
@@ -148,11 +179,14 @@
       halt();
       cancelSay = () => resolve(false);
       const ses = session;
+      text = clean(text) || 'لنتابع الشرح.';
+      ttsRetry = 0;
       liveSubtitle.textContent = text;
       teacherStatusText.textContent = 'الأستاذ يحضّر الشرح...';
       const done = () => {
         if (ses !== session) return;
         cancelAnimationFrame(raf);
+        clearInterval(wdTimer);
         if (p) finishReveal(p);
         setSpeakingUI(false);
         cancelSay = null;
@@ -160,17 +194,46 @@
       };
       let url = null;
       if (voiceEngineMode === 'gemini') {
-        try { url = await fetchAudio(text); } catch (e) { showToast('تعذّر صوت Gemini (' + (e.status || 'شبكة') + ')، تم التحويل لصوت المتصفح'); }
+        const waitIv = setInterval(() => { if (ttsRetry) teacherStatusText.textContent = 'الصوت يتأخر... إعادة المحاولة (' + ttsRetry + ')'; }, 600);
+        try { url = await fetchAudio(text); }
+        catch (er) { showToast('تعذّر صوت Gemini (' + (er.status || 'شبكة') + ')، تم التحويل لصوت المتصفح'); }
+        clearInterval(waitIv);
       }
       if (ses !== session) return;
       if (url) {
-        audio = new Audio(url);
-        audio.playbackRate = speechRate;
-        audio.onended = done;
-        audio.onerror = done;
-        audio.onplay = () => setSpeakingUI(true);
-        if (p) runSync(p, () => (audio && audio.duration ? audio.currentTime / audio.duration : 0));
-        audio.play().catch(() => { showToast('اضغط على زر الشرح للسماح بتشغيل الصوت'); isPlaying = false; updateControlsUI(); });
+        let retried = false;
+        audio = player;
+        player.onended = player.onerror = player.onplay = null;
+        player.src = url;
+        player.defaultPlaybackRate = speechRate;
+        player.playbackRate = speechRate;
+        player.onended = done;
+        player.onerror = () => {
+          if (ses !== session) return;
+          if (!retried) { retried = true; const t = player.currentTime || 0; player.src = url; try { player.currentTime = t; } catch (x) {} player.play().catch(() => {}); }
+          else done();
+        };
+        player.onplay = () => { audioBlocked = false; setSpeakingUI(true); };
+        if (p) runSync(p, () => (player.duration ? player.currentTime / player.duration : 0));
+        player.play().catch(() => {
+          if (ses !== session) return;
+          audioBlocked = true; isPlaying = false; updateControlsUI();
+          teacherStatusText.textContent = 'اضغط «استئناف الشرح» لتشغيل الصوت';
+          showToast('🔊 اضغط زر «استئناف الشرح» لتفعيل الصوت');
+        });
+        // حارس: إذا توقف الصوت فجأة نحاول إكماله، وإلا ننتقل
+        let lastT = -1, stuck = 0;
+        clearInterval(wdTimer);
+        wdTimer = setInterval(() => {
+          if (ses !== session) return clearInterval(wdTimer);
+          if (!isPlaying || audioBlocked || player.paused || player.ended) { stuck = 0; return; }
+          if (Math.abs(player.currentTime - lastT) < 0.05) {
+            stuck++;
+            if (stuck === 2) { player.pause(); player.play().catch(() => {}); }
+            else if (stuck >= 4) { clearInterval(wdTimer); done(); }
+          } else stuck = 0;
+          lastT = player.currentTime;
+        }, 1500);
         return;
       }
       const dur = Math.max(4000, (text.length * 75) / speechRate);
@@ -206,7 +269,7 @@
       const gs = groupBlocks(d).map((g) => textOf(g.items));
       const title = gs.shift() || '';
       exCache.set(key, ai('explain', { lesson: LESSONS[lIdx].title, title, blocks: gs, mode, detail: cfg.detail, notes: cfg.notes })
-        .then((r) => r.explanations).catch(() => null)
+        .then((r) => r.explanations.map(clean)).catch(() => null)
         .then((v) => { if (!v) exCache.delete(key); return v; }));
     }
     return exCache.get(key);
@@ -237,10 +300,25 @@
   async function runCard(idx, mode) {
     const lesson = LESSONS[currentLessonIdx];
     if (idx < 0 || idx >= lesson.steps.length) {
-      isPlaying = false;
-      updateControlsUI();
-      teacherStatusText.textContent = 'اكتمل الدرس بنجاح!';
-      showToast('اكتمل شرح هذا الدرس! يمكنك الانتقال إلى الدرس الموالي.');
+      halt();
+      const my2 = ++flow;
+      const next = LESSONS[currentLessonIdx + 1];
+      if (!next) {
+        isPlaying = false; updateControlsUI();
+        teacherStatusText.textContent = 'اكتملت كل الدروس';
+        showToast('اكتملت كل الدروس! بالتوفيق فالفرض.');
+        return;
+      }
+      teacherStatusText.textContent = 'الأستاذ ينتظر اختيارك...';
+      if (promptEl) promptEl.textContent = '✅ اكتمل هذا الدرس. نكملو للدرس الموالي «' + next.title + '»؟ اضغط "راه فهمت (دوز للتالي)" للمتابعة، أو "عاود الشرح" لإعادة هذا الدرس.';
+      const pick = new Promise((res) => {
+        askResolve = (c) => { askResolve = null; if (promptEl) promptEl.textContent = DEFAULT_PROMPT; res(c); };
+      });
+      say('انتهينا من هذا الدرس. هل نتابع إلى الدرس التالي، أم تريد أن نعيد هذا الدرس؟', null);
+      const choice = await pick;
+      if (my2 !== flow) return;
+      if (choice === 'ok') { const n = currentLessonIdx + 1; loadEmptyLesson(n); isPlaying = true; updateControlsUI(); runCard(0, 'detailed'); }
+      else { isPlaying = true; updateControlsUI(); runCard(0, 'detailed'); }
       return;
     }
     halt();
@@ -314,7 +392,7 @@
     teacherStatusText.textContent = 'الأستاذ يفكر في سؤالك...';
     liveSubtitle.textContent = 'الأستاذ يفكر في سؤالك...';
     let ans;
-    try { ans = (await ai('ask', { question: q, lesson: LESSONS[currentLessonIdx].title, context, notes: cfg.notes })).answer; }
+    try { ans = clean((await ai('ask', { question: q, lesson: LESSONS[currentLessonIdx].title, context, notes: cfg.notes })).answer); }
     catch (e) {
       if (my !== flow) return;
       const hint = e.status === 404 ? 'الملف api/ai.js غير منشور بعد على Vercel.'
@@ -346,7 +424,7 @@
       }
       rs.value = String(v);
     }
-    if (audio) audio.playbackRate = v;
+    player.defaultPlaybackRate = v; if (audio) audio.playbackRate = v;
   }
   async function tuneFlow(t) {
     showToast('الأستاذ كيفهم ملاحظتك...');
@@ -408,9 +486,9 @@
       e.stopImmediatePropagation();
       audio.pause(); isPlaying = false; updateControlsUI(); setSpeakingUI(false);
       teacherStatusText.textContent = 'متوقف مؤقتاً';
-    } else if (!isPlaying && audio && audio.paused && !audio.ended && audio.currentTime > 0) {
+    } else if (!isPlaying && audio && audio.paused && !audio.ended && (audio.currentTime > 0 || audioBlocked)) {
       e.stopImmediatePropagation();
-      isPlaying = true; audio.play(); updateControlsUI(); setSpeakingUI(true);
+      audioBlocked = false; isPlaying = true; audio.play().catch(() => {}); updateControlsUI(); setSpeakingUI(true);
     }
   }, true);
   ['prevStepBtn', 'nextStepBtn'].forEach((id) =>
