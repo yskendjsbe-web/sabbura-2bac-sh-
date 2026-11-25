@@ -28,6 +28,7 @@ async function synth(key, text) {
   let best = null, lastErr = '', lastStatus = 502;
   for (let attempt = 0; attempt < 3; attempt++) {
     let res = null;
+    const sts = [];
     for (const model of MODELS) {
       let r;
       try {
@@ -57,6 +58,7 @@ async function synth(key, text) {
         continue;
       }
       lastStatus = r.status;
+      sts.push(r.status);
       lastErr = model + ' ' + r.status + ': ' + (await r.text()).slice(0, 200);
       if (!RETRY.includes(r.status)) break;
     }
@@ -64,7 +66,10 @@ async function synth(key, text) {
       if (!best || res.pcm.length > best.pcm.length) best = res;
       const secs = res.pcm.length / (res.rate * 2);
       if (secs >= Math.max(1.2, text.length / 24)) return res; // صوت كامل
-    } else await sleep(1200 * (attempt + 1));
+    } else {
+      if (sts.length && sts.every((s) => s === 429)) { const e = new Error(lastErr); e.status = 429; throw e; }
+      await sleep(1200 * (attempt + 1));
+    }
   }
   if (best) return best; // أطول نسخة حصلنا عليها
   const e = new Error(lastErr || 'TTS failed');
@@ -73,7 +78,19 @@ async function synth(key, text) {
 }
 
 module.exports = async (req, res) => {
-  if (req.method === 'GET') return res.status(200).json({ ok: true, hasKey: !!process.env.GEMINI_API_KEY });
+  if (req.method === 'GET') {
+    const k = process.env.GEMINI_API_KEY;
+    if (req.query && req.query.test) {
+      if (!k) return res.status(200).json({ ok: false, error: 'GEMINI_API_KEY غير مضاف' });
+      try {
+        const r = await synth(k, 'مرحباً بكم');
+        return res.status(200).json({ ok: true, seconds: +(r.pcm.length / (r.rate * 2)).toFixed(1) });
+      } catch (e) {
+        return res.status(200).json({ ok: false, status: e.status, detail: String(e.message || e).slice(0, 500) });
+      }
+    }
+    return res.status(200).json({ ok: true, hasKey: !!k, models: MODELS });
+  }
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
   const key = process.env.GEMINI_API_KEY;
   if (!key) return res.status(500).json({ error: 'Missing GEMINI_API_KEY' });
