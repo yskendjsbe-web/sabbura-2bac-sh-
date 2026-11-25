@@ -739,6 +739,8 @@
     let activeTypingIntervals = [];
     let nextStepTimeout = null;
     let currentAudioObj = null;
+    let speechRunId = 0;
+    let speechWatchdog = null;
     let audioCtx = null;
 
     const emptyBoardOverlay = document.getElementById('emptyBoardOverlay');
