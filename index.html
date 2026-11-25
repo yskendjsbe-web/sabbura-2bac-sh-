@@ -840,32 +840,197 @@
       boardCanvas.scrollTop = boardCanvas.scrollHeight;
     }
 
-    function stopAllAudio() {
-      clearTimeout(nextStepTimeout);
-      if ('speechSynthesis' in window) {
-        try { window.speechSynthesis.cancel(); } catch (e) {}
-      }
-      if (currentAudioObj) {
-        try {
-          currentAudioObj.pause();
-          currentAudioObj.src = '';
-        } catch (e) {}
-        currentAudioObj = null;
-      }
-      setSpeakingUI(false);
+
+function stopAllAudio() {
+  speechRunId++;
+  clearTimeout(nextStepTimeout);
+  clearTimeout(speechWatchdog);
+
+  if ('speechSynthesis' in window) {
+    try {
+      window.speechSynthesis.cancel();
+    } catch (e) {}
+  }
+
+  if (currentAudioObj) {
+    try {
+      currentAudioObj.pause();
+      currentAudioObj.removeAttribute('src');
+      currentAudioObj.load();
+    } catch (e) {}
+    currentAudioObj = null;
+  }
+
+  setSpeakingUI(false);
+}
+
+// تقسيم الشرح إلى مقاطع قصيرة
+function splitBrowserSpeech(text, maxLen = 150) {
+  const chunks = [];
+  let remaining = text.trim();
+
+  while (remaining.length > maxLen) {
+    let cut = remaining.lastIndexOf('،', maxLen);
+    if (cut < maxLen * 0.5) cut = remaining.lastIndexOf('.', maxLen);
+    if (cut < maxLen * 0.5) cut = remaining.lastIndexOf('؟', maxLen);
+    if (cut < maxLen * 0.5) cut = remaining.lastIndexOf(' ', maxLen);
+
+    if (cut <= 0) cut = maxLen;
+
+    chunks.push(remaining.slice(0, cut + 1).trim());
+    remaining = remaining.slice(cut + 1).trim();
+  }
+
+  if (remaining) chunks.push(remaining);
+  return chunks;
+}
+
+function speakSynchronized(text, onDone) {
+  stopAllAudio();
+
+  const runId = ++speechRunId;
+  liveSubtitle.textContent = text;
+
+  const hasBrowserSpeech = 'speechSynthesis' in window;
+
+  const voices = hasBrowserSpeech
+    ? window.speechSynthesis.getVoices()
+    : [];
+
+  const arabicVoice =
+    voices.find(v => v.lang.toLowerCase() === 'ar-sa') ||
+    voices.find(v => v.lang.toLowerCase().startsWith('ar'));
+
+  const useCloud =
+    voiceEngineMode === 'cloud' ||
+    (voiceEngineMode === 'auto' && !arabicVoice) ||
+    !hasBrowserSpeech;
+
+  if (useCloud) {
+    playCloudTTS(text, onDone);
+    return;
+  }
+
+  const chunks = splitBrowserSpeech(text, 150);
+  let index = 0;
+  let completed = false;
+
+  function finish() {
+    if (completed || runId !== speechRunId) return;
+
+    completed = true;
+    clearTimeout(speechWatchdog);
+    setSpeakingUI(false);
+
+    if (isPlaying && onDone) {
+      nextStepTimeout = setTimeout(() => {
+        if (runId === speechRunId && isPlaying) onDone();
+      }, 500);
+    }
+  }
+
+  function fallbackToCloud() {
+    if (completed || runId !== speechRunId) return;
+
+    completed = true;
+    clearTimeout(speechWatchdog);
+
+    try {
+      window.speechSynthesis.cancel();
+    } catch (e) {}
+
+    playCloudTTS(text, onDone);
+  }
+
+  function playNext() {
+    if (runId !== speechRunId || !isPlaying || completed) return;
+
+    if (index >= chunks.length) {
+      finish();
+      return;
     }
 
-    function setSpeakingUI(speaking) {
-      if (speaking) {
-        soundWave.classList.remove('paused');
-        teacherStatusText.textContent = 'الأستاذ يكتب ويشرح الآن...';
-      } else {
-        soundWave.classList.add('paused');
-        teacherStatusText.textContent = isPlaying ? 'جاري المتابعة...' : 'متوقف مؤقتاً';
-      }
+    const chunk = chunks[index++];
+    const utterance = new SpeechSynthesisUtterance(chunk);
+
+    utterance.lang = arabicVoice ? arabicVoice.lang : 'ar-SA';
+
+    if (arabicVoice) utterance.voice = arabicVoice;
+
+    utterance.rate = speechRate;
+    utterance.pitch = 1;
+    utterance.volume = 1;
+
+    let started = false;
+
+    function resetWatchdog() {
+      clearTimeout(speechWatchdog);
+
+      speechWatchdog = setTimeout(() => {
+        if (runId !== speechRunId || completed) return;
+
+        // إذا توقف المتصفح وسط النطق، نستعمل المحرك الاحتياطي
+        fallbackToCloud();
+      }, started
+        ? Math.max(25000, chunk.length * 350 / speechRate)
+        : 12000
+      );
     }
 
-    function speakSynchronized(text, onDone) {
+    utterance.onstart = () => {
+      if (runId !== speechRunId) return;
+
+      started = true;
+      setSpeakingUI(true);
+      resetWatchdog();
+    };
+
+    utterance.onboundary = () => {
+      if (runId !== speechRunId || completed) return;
+      resetWatchdog();
+    };
+
+    utterance.onend = () => {
+      if (runId !== speechRunId || completed) return;
+
+      clearTimeout(speechWatchdog);
+
+      // الانتقال للمقطع التالي بعد انتهاء الحالي
+      setTimeout(() => {
+        if (runId === speechRunId && isPlaying) {
+          playNext();
+        }
+      }, 150);
+    };
+
+    utterance.onerror = (event) => {
+      if (runId !== speechRunId || completed) return;
+
+      if (event.error === 'canceled' ||
+          event.error === 'interrupted') {
+        return;
+      }
+
+      fallbackToCloud();
+    };
+
+    resetWatchdog();
+
+    try {
+      window.speechSynthesis.speak(utterance);
+    } catch (e) {
+      fallbackToCloud();
+    }
+  }
+
+  if (!chunks.length) {
+    finish();
+    return;
+  }
+
+  playNext();
+}
+
       stopAllAudio();
       liveSubtitle.textContent = text;
       setSpeakingUI(true);
