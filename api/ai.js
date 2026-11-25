@@ -18,7 +18,15 @@ const TUNE_SCHEMA = {
   required: ['intent', 'reply'],
 };
 const notesText = (n) => (Array.isArray(n) && n.length ? '\nتعليمات أسلوب دائمة من التلميذ (التزم بها): ' + n.slice(-6).map((x) => String(x).slice(0, 200)).join(' | ') : '');
-const LEN = { brief: 'بين 120 و300 حرف', normal: 'بين 250 و650 حرفاً', detailed: 'بين 450 و900 حرف' };
+const LEN = { brief: 'بين 100 و220 حرفاً', normal: 'بين 200 و450 حرفاً', detailed: 'بين 350 و650 حرفاً' };
+const NOCHAT = ' ابدأ مباشرة بالشرح دون أي تحية أو نداء، ولا تقل «يا بني» ولا «سوف أعود» ولا أي وعد بالرجوع لاحقاً: اشرح الآن بشكل كامل.';
+const scrub = (t) => {
+  const s = String(t || '')
+    .replace(/يا\s+(?:بنيّ|بني|بُنيّ|بنيَّ|ابني|تلميذي|عزيزي|بطل)\s*[،,:]?\s*/g, '')
+    .replace(/[^.؟!\n]*(?:سوف\s+|س)أعود[^.؟!\n]*[.؟!]?/g, '')
+    .replace(/\s{2,}/g, ' ').trim();
+  return s;
+};
 
 const MODELS = [process.env.GEMINI_TEXT_MODEL, 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash'].filter(Boolean);
 
@@ -77,15 +85,15 @@ module.exports = async (req, res) => {
       let prompt =
         `الدرس: ${String(b.lesson || '').slice(0, 200)}\nعنوان البطاقة: ${String(b.title || '').slice(0, 300)}\n\nالنقاط:\n` +
         blocks.map((t, i) => `${i + 1}) ${t}`).join('\n\n') +
-        '\n\nاشرح كل نقطة شرحاً مفصلاً ودقيقاً كأنك تتحدث مع التلميذ أمامك: ابدأ بذكر اسم النقطة، فسّر كل جزء فيها ' +
+        '\n\nاشرح كل نقطة شرحاً دقيقاً كأنك تتحدث مع التلميذ أمامك: ابدأ بذكر اسم النقطة، فسّر كل جزء فيها ' +
         'مع مثال أو ربط بالنص عند الحاجة، ثم اختم بجملة تثبيت قصيرة. التزم بمضمون النقاط المعطاة ولا تخترع أسماء أو تواريخ ' +
         'أو أبياتاً جديدة. كل شرح ' + (LEN[b.detail] || LEN.normal) + '. أرجع مصفوفة JSON من النصوص بنفس عدد النقاط وبنفس الترتيب.';
       if (b.mode === 'simpler')
         prompt += '\nالتلميذ لم يفهم في المرة السابقة، فاشرح بكلمات أبسط وبمثال من الحياة اليومية، وبجمل أقصر.';
-      prompt += notesText(b.notes);
+      prompt += NOCHAT + notesText(b.notes);
       let arr = [];
       try { arr = JSON.parse(await gemini(key, prompt, ARRAY_SCHEMA)); } catch (e) { arr = []; }
-      const explanations = blocks.map((t, i) => String(arr[i] || t).slice(0, 1100));
+      const explanations = blocks.map((t, i) => (scrub(String(arr[i] || t)) || t).slice(0, 800));
       return res.status(200).json({ explanations });
     }
 
@@ -109,8 +117,8 @@ module.exports = async (req, res) => {
       const prompt =
         `الدرس: ${String(b.lesson || '').slice(0, 200)}\nما هو مكتوب الآن على السبورة:\n${String(b.context || '').slice(0, 4000)}\n\n` +
         `سؤال التلميذ: ${q}\n\nأجب بدقة وبوضوح في 300 إلى 650 حرفاً، معتمداً على ما في السبورة أولاً، ` +
-        'وبمثال إن لزم. إن كان السؤال خارج مقرر اللغة العربية فاعتذر بلطف وأعده إلى الدرس.' + notesText(b.notes);
-      const answer = (await gemini(key, prompt, null)).trim().slice(0, 1100);
+        'وبمثال إن لزم. إن كان السؤال خارج مقرر اللغة العربية فاعتذر بلطف وأعده إلى الدرس.' + NOCHAT + notesText(b.notes);
+      const answer = (scrub(await gemini(key, prompt, null)) || 'أعد صياغة سؤالك من فضلك.').slice(0, 900);
       return res.status(200).json({ answer });
     }
     return res.status(400).json({ error: 'Bad action' });
